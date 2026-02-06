@@ -620,7 +620,7 @@ const validateAttribute = (attribute) => {
 const formatIndustryLabel = (name) => name.replace(/[_-]+/g, " ");
 
 const buildExportRows = (events, attributes) => {
-  const eventRows = [["eventName", "eventPayload", "dataType", "description"]];
+  const eventRows = [["eventName", "eventPayload", "dataType", "description", "eventDescription"]];
   events.forEach((event) => {
     const payloads = [
       ...event.payloads.map((payload) => ({
@@ -638,7 +638,7 @@ const buildExportRows = (events, attributes) => {
     ];
 
     if (payloads.length === 0) {
-      eventRows.push([event.eventName, "", "", event.description || ""]);
+      eventRows.push([event.eventName, "", "", "", event.description || ""]);
       return;
     }
 
@@ -648,6 +648,7 @@ const buildExportRows = (events, attributes) => {
         payload.name,
         payload.dataType,
         payload.description || "",
+        index === 0 ? event.description || "" : "",
       ]);
     });
   });
@@ -663,13 +664,13 @@ const buildExportRows = (events, attributes) => {
 
   const ruleRows = [
     [],
-    ["RULES"],
-    ["Events and payloads must be lowercase snake_case."],
-    ["No nested arrays or nested objects."],
-    ["Only one array payload items[] per event (array of objects only)."],
-    ["Event data types: date (\"2025-12-12 11:11:25\"), text (\"hello\"), integer (12), float (12.1)."],
-    ["Attribute names must be UPPER_CASE_SNAKE_CASE."],
-    ["Attribute data types: date (\"2025-12-12\"), text (\"hello\"), integer (12), float (12.1)."],
+    ["", "", "", "", "RULES"],
+    ["", "", "", "", "Events and payloads must be lowercase snake_case."],
+    ["", "", "", "", "No nested arrays or nested objects."],
+    ["", "", "", "", "Only one array payload items[] per event (array of objects only)."],
+    ["", "", "", "", 'Event data types: date ("2025-12-12 11:11:25"), text ("hello"), integer (12), float (12.1).'],
+    ["", "", "", "", "Attribute names must be UPPER_CASE_SNAKE_CASE."],
+    ["", "", "", "", 'Attribute data types: date ("2025-12-12"), text ("hello"), integer (12), float (12.1).'],
   ];
 
   return { eventRows: [...eventRows, ...ruleRows], attributeRows };
@@ -833,23 +834,52 @@ const App = () => {
     setLastSelected({ industry: industryName, index });
   };
 
-  const handleSaveEvent = (industryName, updatedEvent) => {
-    updateEvent(industryName, updatedEvent.id, () => updatedEvent);
+const handleSaveDrafts = (industryName, drafts) => {
+  if (!drafts.length) {
     setEditingEvent(null);
-  };
+    return;
+  }
 
-  const handleAddEvent = () => {
-    if (!selectedIndustry) return;
-    const newEvent = createEvent({ name: "", description: "", industry: selectedIndustry });
+  const [firstDraft, ...restDrafts] = drafts;
+
+  // update the existing event with the first draft
+  updateEvent(industryName, firstDraft.id, () => ({ ...firstDraft, selected: true }));
+
+  // append additional drafts as new events
+  if (restDrafts.length) {
     setIndustries((prev) =>
-      prev.map((industry) =>
-        industry.name === selectedIndustry
-          ? { ...industry, events: [newEvent, ...industry.events] }
-          : industry
-      )
+      prev.map((industry) => {
+        if (industry.name !== industryName) return industry;
+        return {
+          ...industry,
+          events: [
+            ...restDrafts.map((draft) => ({
+              ...draft,
+              id: uid("ev"),
+              selected: true,
+            })),
+            ...industry.events,
+          ],
+        };
+      })
     );
-    setEditingEvent({ industry: selectedIndustry, eventId: newEvent.id });
-  };
+  }
+
+  setEditingEvent(null);
+};
+
+const handleAddEvent = () => {
+  if (!selectedIndustry) return;
+  const newEvent = createEvent({ name: "", description: "", industry: selectedIndustry });
+  setIndustries((prev) =>
+    prev.map((industry) =>
+      industry.name === selectedIndustry
+        ? { ...industry, events: [newEvent, ...industry.events] }
+        : industry
+    )
+  );
+  setEditingEvent({ industry: selectedIndustry, eventId: newEvent.id, isNew: true });
+};
 
   const handleExport = () => {
     const { eventRows, attributeRows } = buildExportRows(selectedEvents, selectedAttributes);
@@ -1055,10 +1085,10 @@ const App = () => {
           </div>
 
           {showRules && (
-            <RulesOverlay onClose={() => setShowRules(false)}>
-              <RulesPanel onClose={() => setShowRules(false)} />
-            </RulesOverlay>
-          )}
+          <RulesOverlay onClose={() => setShowRules(false)}>
+            <RulesPanel onClose={() => setShowRules(false)} />
+          </RulesOverlay>
+        )}
 
           {view === "library" ? (
             <>
@@ -1109,8 +1139,24 @@ const App = () => {
               .find((industry) => industry.name === editingEvent.industry)
               ?.events.find((evt) => evt.id === editingEvent.eventId) || null
           }
-          onClose={() => setEditingEvent(null)}
-          onSave={(updatedEvent) => handleSaveEvent(editingEvent.industry, updatedEvent)}
+          industryName={editingEvent.industry}
+          isNew={Boolean(editingEvent.isNew)}
+          onClose={(shouldRemoveNew) => {
+            if (shouldRemoveNew && editingEvent.isNew) {
+              setIndustries((prev) =>
+                prev.map((industry) =>
+                  industry.name === editingEvent.industry
+                    ? {
+                        ...industry,
+                        events: industry.events.filter((evt) => evt.id !== editingEvent.eventId),
+                      }
+                    : industry
+                )
+              );
+            }
+            setEditingEvent(null);
+          }}
+          onSaveAll={(drafts) => handleSaveDrafts(editingEvent.industry, drafts)}
         />
       )}
 
@@ -1186,32 +1232,61 @@ const EventCard = ({ event, onEdit, onToggleSelect }) => {
   );
 };
 
-const EventEditor = ({ event, onClose, onSave }) => {
-  const [draft, setDraft] = useState(() => (event ? JSON.parse(JSON.stringify(event)) : null));
+const EventEditor = ({ event, industryName, isNew, onClose, onSaveAll }) => {
+  if (!event) return null;
+
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const [drafts, setDrafts] = useState(() => [clone(event)]);
+  const [expanded, setExpanded] = useState(() => [true]);
+  const [attemptedSave, setAttemptedSave] = useState(false);
 
   useEffect(() => {
     if (event) {
-      setDraft(JSON.parse(JSON.stringify(event)));
+      setDrafts([clone(event)]);
+      setExpanded([true]);
     }
   }, [event]);
 
-  if (!event || !draft) return null;
+  const addDraft = () => {
+    const newDraft = createEvent({ name: "", description: "", industry: industryName });
+    setDrafts((prev) => [...prev, newDraft]);
+    setExpanded((prev) => [...prev, true]);
+  };
 
-  const { errors, warnings } = validateEvent(draft);
+  const removeDraft = (index) => {
+    if (drafts.length === 1) return;
+    setDrafts((prev) => prev.filter((_, idx) => idx !== index));
+    setExpanded((prev) => prev.filter((_, idx) => idx !== index));
+  };
 
-  const updateDraft = (updater) => setDraft((prev) => updater({ ...prev }));
+  const updateDraft = (index, updater) =>
+    setDrafts((prev) => prev.map((d, idx) => (idx === index ? updater({ ...d }) : d)));
 
-  const updatePayload = (payloadId, updater) => {
-    updateDraft((current) => ({
+  const toggleExpanded = (index) =>
+    setExpanded((prev) => prev.map((val, idx) => (idx === index ? !val : val)));
+
+  const handleSaveAll = () => onSaveAll(drafts);
+  const allNamed = drafts.every((d) => d.eventName && d.eventName.trim().length > 0);
+  const lastNamed = drafts[drafts.length - 1]?.eventName?.trim().length > 0;
+
+  const handleSaveClick = () => {
+    if (!allNamed) {
+      setAttemptedSave(true);
+      return;
+    }
+    onSaveAll(drafts);
+  };
+
+  const makePayloadUpdater = (idx) => (payloadId, updater) =>
+    updateDraft(idx, (current) => ({
       ...current,
       payloads: current.payloads.map((payload) =>
         payload.id === payloadId ? updater({ ...payload }) : payload
       ),
     }));
-  };
 
-  const updateArrayField = (payloadId, updater) => {
-    updateDraft((current) => {
+  const makeArrayUpdater = (idx) => (payloadId, updater) =>
+    updateDraft(idx, (current) => {
       if (!current.arrayPayload) return current;
       return {
         ...current,
@@ -1223,294 +1298,334 @@ const EventEditor = ({ event, onClose, onSave }) => {
         },
       };
     });
-  };
-
-  const addPayload = () => {
-    updateDraft((current) => ({
-      ...current,
-      payloads: [
-        ...current.payloads,
-        createPayload({ name: "", dataType: "text", description: "" }),
-      ],
-    }));
-  };
-
-  const addArrayField = () => {
-    updateDraft((current) => {
-      const arrayPayload = current.arrayPayload || { name: "items", fields: [] };
-      return {
-        ...current,
-        arrayPayload: {
-          ...arrayPayload,
-          fields: [
-            ...arrayPayload.fields,
-            createPayload({ name: "", dataType: "text", description: "" }),
-          ],
-        },
-      };
-    });
-  };
-
-  const removePayload = (payloadId) => {
-    updateDraft((current) => ({
-      ...current,
-      payloads: current.payloads.filter((payload) => payload.id !== payloadId),
-    }));
-  };
-
-  const removeArrayField = (payloadId) => {
-    updateDraft((current) => {
-      if (!current.arrayPayload) return current;
-      return {
-        ...current,
-        arrayPayload: {
-          ...current.arrayPayload,
-          fields: current.arrayPayload.fields.filter((payload) => payload.id !== payloadId),
-        },
-      };
-    });
-  };
-
-  const toggleArray = () => {
-    updateDraft((current) => ({
-      ...current,
-      arrayPayload: current.arrayPayload ? null : { name: "items", fields: [] },
-    }));
-  };
 
   return (
     <div className="modal-backdrop">
       <div className="modal">
         <div className="modal-header">
-          <h2>Edit Event</h2>
+          <h2>Bulk Add Events</h2>
           <div className="action-row">
-            <button className="ghost" onClick={onClose}>
+            <button className="ghost" onClick={() => onClose(isNew)}>
               Cancel
             </button>
-            <button className="primary" onClick={() => onSave(draft)}>
-              Save Changes
+            <button className="secondary" onClick={addDraft} disabled={!lastNamed}>
+              + Add Another Event
+            </button>
+            <button className="primary" onClick={handleSaveClick} disabled={!allNamed}>
+              Save All
             </button>
           </div>
         </div>
 
-        <div className="modal-section">
-          <h4>Event Details</h4>
-          <label className="inline-note">Event name (lowercase snake_case, max 50)</label>
-          <input
-            className="input"
-            value={draft.eventName}
-            onChange={(e) =>
-              updateDraft((current) => ({ ...current, eventName: e.target.value }))
-            }
-            onBlur={(e) =>
-              updateDraft((current) => ({
-                ...current,
-                eventName: normalizeSnakeCase(e.target.value),
-              }))
-            }
-            placeholder="screen_load"
-          />
-          <label className="inline-note">Description</label>
-          <textarea
-            className="textarea"
-            value={draft.description}
-            onChange={(e) =>
-              updateDraft((current) => ({ ...current, description: e.target.value }))
-            }
-            placeholder="Explain when this event fires."
-          />
-        </div>
+        {drafts.map((draft, idx) => {
+          const { errors, warnings } = validateEvent(draft);
+          const showNameError = attemptedSave && (!draft.eventName || !draft.eventName.trim());
+          const updatePayload = makePayloadUpdater(idx);
+          const updateArrayField = makeArrayUpdater(idx);
 
-        <div className="modal-section">
-          <h4>Payloads</h4>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Payload Name</th>
-                <th>Data Type</th>
-                <th>Description</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {draft.payloads.map((payload) => (
-                <tr key={payload.id}>
-                  <td>
-                    <input
-                      value={payload.name}
-                      onChange={(e) =>
-                        updatePayload(payload.id, (item) => ({
-                          ...item,
-                          name: e.target.value,
-                          inferredType: false,
-                        }))
-                      }
-                      onBlur={(e) =>
-                        updatePayload(payload.id, (item) => ({
-                          ...item,
-                          name: normalizeSnakeCase(e.target.value),
-                        }))
-                      }
-                      placeholder="page_title"
-                    />
-                  </td>
-                  <td>
-                    <select
-                      value={payload.dataType}
-                      onChange={(e) =>
-                        updatePayload(payload.id, (item) => ({
-                          ...item,
-                          dataType: e.target.value,
-                          inferredType: false,
-                        }))
-                      }
-                    >
-                      {DATA_TYPES.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <input
-                      value={payload.description}
-                      onChange={(e) =>
-                        updatePayload(payload.id, (item) => ({
-                          ...item,
-                          description: e.target.value,
-                        }))
-                      }
-                      placeholder="Short explanation"
-                    />
-                  </td>
-                  <td>
-                    <button className="ghost" onClick={() => removePayload(payload.id)}>
+          const addPayload = () => {
+            updateDraft(idx, (current) => ({
+              ...current,
+              payloads: [
+                ...current.payloads,
+                createPayload({ name: "", dataType: "text", description: "" }),
+              ],
+            }));
+          };
+
+          const addArrayField = () => {
+            updateDraft(idx, (current) => {
+              const arrayPayload = current.arrayPayload || { name: "items", fields: [] };
+              return {
+                ...current,
+                arrayPayload: {
+                  ...arrayPayload,
+                  fields: [
+                    ...arrayPayload.fields,
+                    createPayload({ name: "", dataType: "text", description: "" }),
+                  ],
+                },
+              };
+            });
+          };
+
+          const removePayload = (payloadId) => {
+            updateDraft(idx, (current) => ({
+              ...current,
+              payloads: current.payloads.filter((payload) => payload.id !== payloadId),
+            }));
+          };
+
+          const removeArrayField = (payloadId) => {
+            updateDraft(idx, (current) => {
+              if (!current.arrayPayload) return current;
+              return {
+                ...current,
+                arrayPayload: {
+                  ...current.arrayPayload,
+                  fields: current.arrayPayload.fields.filter((payload) => payload.id !== payloadId),
+                },
+              };
+            });
+          };
+
+          const toggleArray = () => {
+            updateDraft(idx, (current) => ({
+              ...current,
+              arrayPayload: current.arrayPayload ? null : { name: "items", fields: [] },
+            }));
+          };
+
+          return (
+            <div key={idx} className="modal-section">
+              <div className="section-toggle">
+                <h4>
+                  Event {idx + 1} {draft.eventName ? `· ${draft.eventName}` : ""}
+                </h4>
+                <div className="action-row">
+                  {drafts.length > 1 && (
+                    <button className="ghost" onClick={() => removeDraft(idx)}>
                       Remove
                     </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <button className="secondary" onClick={addPayload}>
-            Add Payload
-          </button>
-        </div>
+                  )}
+                  <button className="ghost" onClick={() => toggleExpanded(idx)}>
+                    {expanded[idx] ? "Collapse" : "Expand"}
+                  </button>
+                </div>
+              </div>
 
-        <div className="modal-section">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h4>Array Payload</h4>
-            <button className="ghost" onClick={toggleArray}>
-              {draft.arrayPayload ? "Remove Array" : "Add Array"}
-            </button>
-          </div>
-          <p className="inline-note">
-            Array payloads are always exported as items[].field_name and must be arrays of
-            objects only.
-          </p>
-          {draft.arrayPayload ? (
-            <>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Field Name</th>
-                    <th>Data Type</th>
-                    <th>Description</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {draft.arrayPayload.fields.map((payload) => (
-                    <tr key={payload.id}>
-                      <td>
-                        <input
-                          value={payload.name}
-                          onChange={(e) =>
-                            updateArrayField(payload.id, (item) => ({
-                              ...item,
-                              name: e.target.value,
-                              inferredType: false,
-                            }))
-                          }
-                          onBlur={(e) =>
-                            updateArrayField(payload.id, (item) => ({
-                              ...item,
-                              name: normalizeSnakeCase(e.target.value),
-                            }))
-                          }
-                          placeholder="sku"
-                        />
-                      </td>
-                      <td>
-                        <select
-                          value={payload.dataType}
-                          onChange={(e) =>
-                            updateArrayField(payload.id, (item) => ({
-                              ...item,
-                              dataType: e.target.value,
-                              inferredType: false,
-                            }))
-                          }
-                        >
-                          {DATA_TYPES.map((type) => (
-                            <option key={type} value={type}>
-                              {type}
-                            </option>
+              {expanded[idx] ? (
+                <>
+                  <label className="inline-note">Event name (lowercase snake_case, max 50)</label>
+                  <input
+                    className="input"
+                    value={draft.eventName}
+                    onChange={(e) =>
+                      updateDraft(idx, (current) => ({ ...current, eventName: e.target.value }))
+                    }
+                    onBlur={(e) =>
+                      updateDraft(idx, (current) => ({
+                        ...current,
+                        eventName: normalizeSnakeCase(e.target.value),
+                      }))
+                    }
+                    placeholder="screen_load"
+                  />
+                  {showNameError && (
+                    <div className="inline-note" style={{ color: "var(--error)" }}>
+                      Event name is required before saving.
+                    </div>
+                  )}
+                  <label className="inline-note">Event Description</label>
+                  <textarea
+                    className="textarea"
+                    value={draft.description}
+                    onChange={(e) =>
+                      updateDraft(idx, (current) => ({ ...current, description: e.target.value }))
+                    }
+                    placeholder="Explain when this event fires."
+                  />
+
+                  <h4>Payloads</h4>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Payload Name</th>
+                        <th>Data Type</th>
+                        <th>Description</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {draft.payloads.map((payload) => (
+                        <tr key={payload.id}>
+                          <td>
+                            <input
+                              value={payload.name}
+                              onChange={(e) =>
+                                updatePayload(payload.id, (item) => ({
+                                  ...item,
+                                  name: e.target.value,
+                                  inferredType: false,
+                                }))
+                              }
+                              onBlur={(e) =>
+                                updatePayload(payload.id, (item) => ({
+                                  ...item,
+                                  name: normalizeSnakeCase(e.target.value),
+                                }))
+                              }
+                              placeholder="page_title"
+                            />
+                          </td>
+                          <td>
+                            <select
+                              value={payload.dataType}
+                              onChange={(e) =>
+                                updatePayload(payload.id, (item) => ({
+                                  ...item,
+                                  dataType: e.target.value,
+                                  inferredType: false,
+                                }))
+                              }
+                            >
+                              {DATA_TYPES.map((type) => (
+                                <option key={type} value={type}>
+                                  {type}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td>
+                            <input
+                              value={payload.description}
+                              onChange={(e) =>
+                                updatePayload(payload.id, (item) => ({
+                                  ...item,
+                                  description: e.target.value,
+                                }))
+                              }
+                              placeholder="Short explanation"
+                            />
+                          </td>
+                          <td>
+                            <button className="ghost" onClick={() => removePayload(payload.id)}>
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <button className="secondary" onClick={addPayload}>
+                    Add Payload
+                  </button>
+
+                  <div
+                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                  >
+                    <h4>Array Payload</h4>
+                    <button className="ghost" onClick={toggleArray}>
+                      {draft.arrayPayload ? "Remove Array" : "Add Array"}
+                    </button>
+                  </div>
+                  <p className="inline-note">
+                    Array payloads are always exported as items[].field_name and must be arrays of
+                    objects only.
+                  </p>
+                  {draft.arrayPayload ? (
+                    <>
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Field Name</th>
+                            <th>Data Type</th>
+                            <th>Description</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {draft.arrayPayload.fields.map((payload) => (
+                            <tr key={payload.id}>
+                              <td>
+                                <input
+                                  value={payload.name}
+                                  onChange={(e) =>
+                                    updateArrayField(payload.id, (item) => ({
+                                      ...item,
+                                      name: e.target.value,
+                                      inferredType: false,
+                                    }))
+                                  }
+                                  onBlur={(e) =>
+                                    updateArrayField(payload.id, (item) => ({
+                                      ...item,
+                                      name: normalizeSnakeCase(e.target.value),
+                                    }))
+                                  }
+                                  placeholder="sku"
+                                />
+                              </td>
+                              <td>
+                                <select
+                                  value={payload.dataType}
+                                  onChange={(e) =>
+                                    updateArrayField(payload.id, (item) => ({
+                                      ...item,
+                                      dataType: e.target.value,
+                                      inferredType: false,
+                                    }))
+                                  }
+                                >
+                                  {DATA_TYPES.map((type) => (
+                                    <option key={type} value={type}>
+                                      {type}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td>
+                                <input
+                                  value={payload.description}
+                                  onChange={(e) =>
+                                    updateArrayField(payload.id, (item) => ({
+                                      ...item,
+                                      description: e.target.value,
+                                    }))
+                                  }
+                                  placeholder="Short explanation"
+                                />
+                              </td>
+                              <td>
+                                <button
+                                  className="ghost"
+                                  onClick={() => removeArrayField(payload.id)}
+                                >
+                                  Remove
+                                </button>
+                              </td>
+                            </tr>
                           ))}
-                        </select>
-                      </td>
-                      <td>
-                        <input
-                          value={payload.description}
-                          onChange={(e) =>
-                            updateArrayField(payload.id, (item) => ({
-                              ...item,
-                              description: e.target.value,
-                            }))
-                          }
-                          placeholder="Short explanation"
-                        />
-                      </td>
-                      <td>
-                        <button
-                          className="ghost"
-                          onClick={() => removeArrayField(payload.id)}
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <button className="secondary" onClick={addArrayField}>
-                Add Array Field
-              </button>
-            </>
-          ) : (
-            <div className="empty-state">No array payload yet.</div>
-          )}
-        </div>
+                        </tbody>
+                      </table>
+                      <button className="secondary" onClick={addArrayField}>
+                        Add Array Field
+                      </button>
+                    </>
+                  ) : (
+                    <div className="empty-state">No array payload yet.</div>
+                  )}
 
-        <div className="modal-section">
-          <h4>Validation</h4>
-          <div className="validation-list">
-            {errors.length === 0 && warnings.length === 0 && (
-              <div className="validation-item">No issues found.</div>
-            )}
-            {errors.map((message, index) => (
-              <div key={`error-${index}`} className="validation-item error">
-                {message}
-              </div>
-            ))}
-            {warnings.map((message, index) => (
-              <div key={`warn-${index}`} className="validation-item warning">
-                {message}
-              </div>
-            ))}
-          </div>
-        </div>
+                  <h4>Validation</h4>
+                  <div className="validation-list">
+                    {errors.length === 0 && warnings.length === 0 && (
+                      <div className="validation-item">No issues found.</div>
+                    )}
+                    {errors.map((message, index) => (
+                      <div key={`error-${index}`} className="validation-item error">
+                        {message}
+                      </div>
+                    ))}
+                    {warnings.map((message, index) => (
+                      <div key={`warn-${index}`} className="validation-item warning">
+                        {message}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="summary-bar">
+                  <div className="summary-chip">Event: {draft.eventName || "Untitled"}</div>
+                  <div className="summary-chip">
+                    Payloads: {draft.payloads.length} | Array fields:{" "}
+                    {draft.arrayPayload ? draft.arrayPayload.fields.length : 0}
+                  </div>
+                  <p className="inline-note">{draft.description || "No description yet."}</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1633,7 +1748,7 @@ const AttributesManager = ({
 
 const ExportPreview = ({ events, attributes, onClose, onRemoveEvent }) => {
   const { attributeRows } = buildExportRows(events, attributes);
-  const eventHeader = ["eventName", "eventPayload", "dataType", "description", "Action"];
+  const eventHeader = ["eventName", "eventPayload", "dataType", "description", "eventDescription", "Action"];
   const eventBody = events.flatMap((event) => {
     const payloads = [
       ...event.payloads.map((payload) => ({
@@ -1653,7 +1768,7 @@ const ExportPreview = ({ events, attributes, onClose, onRemoveEvent }) => {
     if (payloads.length === 0) {
       return [
         {
-          cells: [event.eventName, "", "", event.description || "", "remove"],
+          cells: [event.eventName, "", "", "", event.description || "", "remove"],
           event,
           isHeader: true,
         },
@@ -1666,6 +1781,7 @@ const ExportPreview = ({ events, attributes, onClose, onRemoveEvent }) => {
         payload.name,
         payload.dataType,
         payload.description || "",
+        index === 0 ? event.description || "" : "",
         index === 0 ? "remove" : "",
       ],
       event: index === 0 ? event : null,

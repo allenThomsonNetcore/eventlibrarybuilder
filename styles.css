@@ -84,6 +84,18 @@ body {
   flex-wrap: wrap;
 }
 
+.action-row > .secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .file-input {
   display: flex;
   flex-direction: column;
