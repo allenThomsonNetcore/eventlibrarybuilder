@@ -661,7 +661,18 @@ const buildExportRows = (events, attributes) => {
     ]),
   ];
 
-  return { eventRows, attributeRows };
+  const ruleRows = [
+    [],
+    ["RULES"],
+    ["Events and payloads must be lowercase snake_case."],
+    ["No nested arrays or nested objects."],
+    ["Only one array payload items[] per event (array of objects only)."],
+    ["Event data types: date (\"2025-12-12 11:11:25\"), text (\"hello\"), integer (12), float (12.1)."],
+    ["Attribute names must be UPPER_CASE_SNAKE_CASE."],
+    ["Attribute data types: date (\"2025-12-12\"), text (\"hello\"), integer (12), float (12.1)."],
+  ];
+
+  return { eventRows: [...eventRows, ...ruleRows], attributeRows };
 };
 
 const App = () => {
@@ -680,6 +691,7 @@ const App = () => {
   );
   const [exportName, setExportName] = useState(defaultExportName);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [showRules, setShowRules] = useState(false);
 
   const loadFromWorkbook = async () => {
     setLoading(true);
@@ -900,7 +912,7 @@ const App = () => {
       <div className="app">
         <header className="topbar">
           <div className="title-block">
-            <h1>Event Library Builder</h1>
+            <h1>Netcore Event Library Builder</h1>
             <p>Loading and normalizing your Excel library.</p>
           </div>
         </header>
@@ -913,7 +925,7 @@ const App = () => {
       <div className="app">
         <header className="topbar">
           <div className="title-block">
-            <h1>Event Library Builder</h1>
+            <h1>Netcore Event Library Builder</h1>
             <p>We hit a problem loading the Excel source.</p>
           </div>
         </header>
@@ -928,7 +940,7 @@ const App = () => {
     <div className="app">
       <header className="topbar">
         <div className="title-block">
-          <h1>Event Library Builder</h1>
+            <h1>Netcore Event Library Builder</h1>
           <p>
             Clean, normalize, and export CE-safe events from a bundled Excel library.
           </p>
@@ -949,6 +961,9 @@ const App = () => {
           </button>
           <button className="ghost" onClick={() => setPreviewOpen(true)}>
             Preview Export
+          </button>
+          <button className="ghost" onClick={() => setShowRules((v) => !v)}>
+            {showRules ? "Hide Rules" : "Show Rules"}
           </button>
           <button className="primary" onClick={handleExport} disabled={!canExport}>
             Export Clean Excel
@@ -1039,6 +1054,12 @@ const App = () => {
             </div>
           </div>
 
+          {showRules && (
+            <RulesOverlay onClose={() => setShowRules(false)}>
+              <RulesPanel onClose={() => setShowRules(false)} />
+            </RulesOverlay>
+          )}
+
           {view === "library" ? (
             <>
               {currentIndustry ? (
@@ -1077,6 +1098,7 @@ const App = () => {
               onClearAll={clearAllAttributes}
             />
           )}
+
         </main>
       </div>
 
@@ -1732,5 +1754,121 @@ const ExportPreview = ({ events, attributes, onClose, onRemoveEvent }) => {
     </div>
   );
 };
+
+const RulesOverlay = ({ onClose, children }) => (
+  <div className="rules-backdrop" onClick={onClose}>
+    <div
+      className="rules-panel"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {children}
+    </div>
+  </div>
+);
+
+const RulesPanel = ({ onClose }) => (
+  <>
+    <div className="rules-panel__header">
+      <div>
+        <h3>Validation Rules</h3>
+        <p className="rules-panel__sub">Keep events CE-safe before exporting.</p>
+      </div>
+      <button className="ghost" onClick={onClose}>
+        Close
+      </button>
+    </div>
+    <div className="rules-grid">
+      <div className="rules-card">
+        <h4>Names</h4>
+        <ul>
+          <li>Events & payloads: lowercase snake_case.</li>
+          <li>Attributes: UPPER_CASE_SNAKE_CASE.</li>
+          <li>No nested arrays or nested objects.</li>
+          <li>Only one array payload (<code>items[]</code>) per event.</li>
+        </ul>
+      </div>
+      <div className="rules-card">
+        <h4>Event dataTypes</h4>
+        <table className="rules-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Example</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>date</td>
+              <td>"2025-12-12 11:11:25"</td>
+              <td>YYYY-MM-DD HH:MM:SS (quoted)</td>
+            </tr>
+            <tr>
+              <td>text</td>
+              <td>"hello"</td>
+              <td>Quoted string</td>
+            </tr>
+            <tr>
+              <td>integer</td>
+              <td>12</td>
+              <td>Whole number</td>
+            </tr>
+            <tr>
+              <td>float</td>
+              <td>12.1</td>
+              <td>Decimal</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="rules-card">
+        <h4>Array payload example</h4>
+        <pre className="rules-code">
+{`"items": [
+  { "mrp": 250.0, "product_name": "Example", "quantity": 1 },
+  { "mrp": 620.2, "product_name": "Example 2", "quantity": 1 }
+]`}
+        </pre>
+        <div className="inline-note">Only array of objects is supported.</div>
+      </div>
+      <div className="rules-card">
+        <h4>Attribute dataTypes</h4>
+        <table className="rules-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Example</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>date</td>
+              <td>"2025-12-12"</td>
+              <td>YYYY-MM-DD (quoted)</td>
+            </tr>
+            <tr>
+              <td>text</td>
+              <td>"hello"</td>
+              <td>Quoted string</td>
+            </tr>
+            <tr>
+              <td>integer</td>
+              <td>12</td>
+              <td>Whole number</td>
+            </tr>
+            <tr>
+              <td>float</td>
+              <td>12.1</td>
+              <td>Decimal</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </>
+);
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
