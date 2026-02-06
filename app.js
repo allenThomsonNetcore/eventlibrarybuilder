@@ -937,6 +937,19 @@ const handleAddEvent = () => {
     }));
   };
 
+  const deleteEvent = (industryName, eventId) => {
+    setIndustries((prev) =>
+      prev.map((industry) =>
+        industry.name === industryName
+          ? { ...industry, events: industry.events.filter((evt) => evt.id !== eventId) }
+          : industry
+      )
+    );
+    if (editingEvent && editingEvent.eventId === eventId) {
+      setEditingEvent(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="app">
@@ -1098,6 +1111,7 @@ const handleAddEvent = () => {
                     <EventCard
                       key={event.id}
                       event={event}
+                      industryName={currentIndustry.name}
                       index={index}
                       onEdit={() =>
                         setEditingEvent({ industry: currentIndustry.name, eventId: event.id })
@@ -1110,6 +1124,7 @@ const handleAddEvent = () => {
                           e.shiftKey
                         )
                       }
+                      onDelete={() => deleteEvent(currentIndustry.name, event.id)}
                     />
                   ))}
                 </div>
@@ -1172,7 +1187,7 @@ const handleAddEvent = () => {
   );
 };
 
-const EventCard = ({ event, onEdit, onToggleSelect }) => {
+const EventCard = ({ event, industryName, onEdit, onToggleSelect, onDelete }) => {
   const [preview, setPreview] = useState(false);
   const { errors, warnings } = validateEvent(event);
 
@@ -1202,6 +1217,9 @@ const EventCard = ({ event, onEdit, onToggleSelect }) => {
         </button>
         <button className="primary" onClick={onToggleSelect}>
           {event.selected ? "Selected" : "Use This Event"}
+        </button>
+        <button className="ghost" onClick={onDelete}>
+          Delete
         </button>
       </div>
       {preview && (
