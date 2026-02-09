@@ -118,6 +118,41 @@ body {
   min-width: 220px;
 }
 
+.toggle-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.toggle-group .toggle {
+  background: transparent;
+  color: #ffffff;
+  border: 1px solid transparent;
+  padding: 6px 12px;
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.toggle-group .toggle.active {
+  background: #ffffff;
+  color: #230f2e;
+}
+
+.file-input select {
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  font-family: "Source Sans 3", sans-serif;
+  min-width: 180px;
+  background: #ffffff;
+  color: var(--ink);
+}
+
+
 button {
   font-family: "Space Grotesk", sans-serif;
   border: none;

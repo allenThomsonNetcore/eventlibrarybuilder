@@ -202,13 +202,18 @@ const detectColumns = (headerRow) => {
   };
 };
 
-const createPayload = ({ name, dataType, description, inferredType }) => ({
-  id: uid("pl"),
-  name,
-  dataType: dataType || "text",
-  description: description || "",
-  inferredType: Boolean(inferredType),
-});
+const createPayload = ({ name, dataType, description, inferredType, sampleValue }) => {
+  const normalizedType = dataType || "text";
+  const fallbackSample = sampleValueForEventType(normalizedType);
+  return {
+    id: uid("pl"),
+    name,
+    dataType: normalizedType,
+    description: description || "",
+    inferredType: Boolean(inferredType),
+    sampleValue: safeString(sampleValue) || fallbackSample,
+  };
+};
 
 const createEvent = ({ name, description, industry }) => ({
   id: uid("ev"),
@@ -221,19 +226,46 @@ const createEvent = ({ name, description, industry }) => ({
   arrayConflict: false,
 });
 
-const createAttribute = ({ name, dataType, description, inferredType, selected }) => ({
-  id: uid("attr"),
-  name,
-  dataType: dataType || "text",
-  description: description || "",
-  inferredType: Boolean(inferredType),
-  selected: Boolean(selected),
-});
+const createAttribute = ({ name, dataType, description, inferredType, selected, sampleValue }) => {
+  const normalizedType = dataType || "text";
+  const fallbackSample = sampleValueForAttributeType(normalizedType);
+  return {
+    id: uid("attr"),
+    name,
+    dataType: normalizedType,
+    description: description || "",
+    inferredType: Boolean(inferredType),
+    selected: Boolean(selected),
+    sampleValue: safeString(sampleValue) || fallbackSample,
+  };
+};
+
+const normalizePayloadShape = (payload) => {
+  const dataType = payload?.dataType || "text";
+  const fallbackSample = sampleValueForEventType(dataType);
+  return {
+    ...payload,
+    dataType,
+    description: payload?.description || "",
+    inferredType: Boolean(payload?.inferredType),
+    sampleValue: safeString(payload?.sampleValue) || fallbackSample,
+  };
+};
 
 const normalizeEventShape = (event) => ({
   ...event,
-  payloads: Array.isArray(event.payloads) ? event.payloads : [],
-  arrayPayload: event.arrayPayload || null,
+  payloads: Array.isArray(event.payloads)
+    ? event.payloads.map(normalizePayloadShape)
+    : [],
+  arrayPayload: event.arrayPayload
+    ? {
+        ...event.arrayPayload,
+        name: event.arrayPayload.name || "items",
+        fields: Array.isArray(event.arrayPayload.fields)
+          ? event.arrayPayload.fields.map(normalizePayloadShape)
+          : [],
+      }
+    : null,
   selected: Boolean(event.selected),
   arrayConflict: Boolean(event.arrayConflict),
 });
@@ -245,11 +277,18 @@ const normalizeIndustryShape = (industry) => ({
     : [],
 });
 
-const normalizeAttributeShape = (attribute) => ({
-  ...attribute,
-  selected: Boolean(attribute.selected),
-  inferredType: Boolean(attribute.inferredType),
-});
+const normalizeAttributeShape = (attribute) => {
+  const dataType = attribute?.dataType || "text";
+  const fallbackSample = sampleValueForAttributeType(dataType);
+  return {
+    ...attribute,
+    dataType,
+    description: attribute?.description || "",
+    sampleValue: safeString(attribute?.sampleValue) || fallbackSample,
+    selected: Boolean(attribute?.selected),
+    inferredType: Boolean(attribute?.inferredType),
+  };
+};
 
 const normalizeState = (industries, attributes) => ({
   industries: industries.map(normalizeIndustryShape),
@@ -619,26 +658,69 @@ const validateAttribute = (attribute) => {
 
 const formatIndustryLabel = (name) => name.replace(/[_-]+/g, " ");
 
+const sampleValueForEventType = (dataType) => {
+  switch ((dataType || "").toLowerCase()) {
+    case "text":
+      return "\"hello\"";
+    case "integer":
+      return "12";
+    case "float":
+      return "12.1";
+    case "date":
+      return "\"2025-12-12 11:11:25\"";
+    default:
+      return "";
+  }
+};
+
+const sampleValueForAttributeType = (dataType) => {
+  switch ((dataType || "").toLowerCase()) {
+    case "text":
+      return "\"hello\"";
+    case "integer":
+      return "12";
+    case "float":
+      return "12.1";
+    case "date":
+      return "\"2025-12-12\"";
+    default:
+      return "";
+  }
+};
+
+const shouldResetSampleValue = (currentSample, previousType, isAttribute = false) => {
+  const current = safeString(currentSample);
+  if (!current) return true;
+  const fallback = isAttribute
+    ? sampleValueForAttributeType(previousType)
+    : sampleValueForEventType(previousType);
+  return current === fallback;
+};
+
 const buildExportRows = (events, attributes) => {
-  const eventRows = [["eventName", "eventPayload", "dataType", "description", "eventDescription"]];
+  const eventRows = [
+    ["eventName", "eventPayload", "dataType", "sampleValue", "description", "eventDescription"],
+  ];
   events.forEach((event) => {
     const payloads = [
       ...event.payloads.map((payload) => ({
         name: payload.name,
         dataType: payload.dataType,
         description: payload.description,
+        sampleValue: payload.sampleValue,
       })),
       ...(event.arrayPayload
         ? event.arrayPayload.fields.map((payload) => ({
             name: `items[].${payload.name}`,
             dataType: payload.dataType,
             description: payload.description,
+            sampleValue: payload.sampleValue,
           }))
         : []),
     ];
 
     if (payloads.length === 0) {
-      eventRows.push([event.eventName, "", "", "", event.description || ""]);
+      eventRows.push([event.eventName, "", "", "", "", event.description || ""]);
       return;
     }
 
@@ -647,6 +729,7 @@ const buildExportRows = (events, attributes) => {
         index === 0 ? event.eventName : "",
         payload.name,
         payload.dataType,
+        safeString(payload.sampleValue) || sampleValueForEventType(payload.dataType),
         payload.description || "",
         index === 0 ? event.description || "" : "",
       ]);
@@ -654,26 +737,118 @@ const buildExportRows = (events, attributes) => {
   });
 
   const attributeRows = [
-    ["ATTRIBUTE", "DATATYPE", "DESCRIPTION"],
+    ["ATTRIBUTE", "DATATYPE", "SAMPLE_VALUE", "DESCRIPTION"],
     ...attributes.map((attribute) => [
       attribute.name,
       attribute.dataType,
+      safeString(attribute.sampleValue) || sampleValueForAttributeType(attribute.dataType),
       attribute.description || "",
     ]),
   ];
 
   const ruleRows = [
     [],
-    ["", "", "", "", "RULES"],
-    ["", "", "", "", "Events and payloads must be lowercase snake_case."],
-    ["", "", "", "", "No nested arrays or nested objects."],
-    ["", "", "", "", "Only one array payload items[] per event (array of objects only)."],
-    ["", "", "", "", 'Event data types: date ("2025-12-12 11:11:25"), text ("hello"), integer (12), float (12.1).'],
-    ["", "", "", "", "Attribute names must be UPPER_CASE_SNAKE_CASE."],
-    ["", "", "", "", 'Attribute data types: date ("2025-12-12"), text ("hello"), integer (12), float (12.1).'],
+    ["", "", "", "", "", "RULES"],
+    ["", "", "", "", "", "Events and payloads must be lowercase snake_case."],
+    ["", "", "", "", "", "No nested arrays or nested objects."],
+    ["", "", "", "", "", "Only one array payload items[] per event (array of objects only)."],
+    [
+      "",
+      "",
+      "",
+      "",
+      "",
+      'Event data types: date ("2025-12-12 11:11:25"), text ("hello"), integer (12), float (12.1).',
+    ],
+    ["", "", "", "", "", "Attribute names must be UPPER_CASE_SNAKE_CASE."],
+    [
+      "",
+      "",
+      "",
+      "",
+      "",
+      'Attribute data types: date ("2025-12-12"), text ("hello"), integer (12), float (12.1).',
+    ],
   ];
 
   return { eventRows: [...eventRows, ...ruleRows], attributeRows };
+};
+
+const XLSX_STYLES = {
+  eventName: { fill: { patternType: "solid", fgColor: { rgb: "#6fe36d" } } },
+  eventPayload: { fill: { patternType: "solid", fgColor: { rgb: "#80c2ed" } } },
+  dataType: {
+    date: { fill: { patternType: "solid", fgColor: { rgb: "#e6f7a1" } } },
+    float: { fill: { patternType: "solid", fgColor: { rgb: "#dbbf86" } } },
+    integer: { fill: { patternType: "solid", fgColor: { rgb: "#f3c6f5" } } },
+    text: { fill: { patternType: "solid", fgColor: { rgb: "#f27e99" } } },
+  },
+};
+
+const XLSX_STYLE_URLS = [
+  "https://unpkg.com/xlsx-js-style@1.2.0/dist/xlsx.full.min.js",
+  "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.full.min.js",
+];
+
+let xlsxLoadPromise = null;
+const ensureXLSX = () => {
+  if (window.XLSX) {
+    window.__XLSX_STYLE_READY = true;
+    return Promise.resolve(window.XLSX);
+  }
+  if (xlsxLoadPromise) return xlsxLoadPromise;
+
+  xlsxLoadPromise = new Promise((resolve, reject) => {
+    const tryLoad = (index) => {
+      if (index >= XLSX_STYLE_URLS.length) {
+        reject(new Error("XLSX library not loaded"));
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = XLSX_STYLE_URLS[index];
+      script.async = true;
+      script.onload = () => {
+        if (window.XLSX) {
+          window.__XLSX_STYLE_READY = true;
+          resolve(window.XLSX);
+        } else {
+          script.remove();
+          tryLoad(index + 1);
+        }
+      };
+      script.onerror = () => {
+        script.remove();
+        tryLoad(index + 1);
+      };
+      document.head.appendChild(script);
+    };
+    tryLoad(0);
+  });
+
+  return xlsxLoadPromise;
+};
+
+const applyEventSheetStyles = (worksheet, eventRows) => {
+  if (!worksheet || !worksheet["!ref"]) return;
+  const range = XLSX.utils.decode_range(worksheet["!ref"]);
+  for (let r = 1; r <= range.e.r; r += 1) {
+    const eventNameCell = XLSX.utils.encode_cell({ r, c: 0 });
+    const payloadCell = XLSX.utils.encode_cell({ r, c: 1 });
+    const dataTypeCell = XLSX.utils.encode_cell({ r, c: 2 });
+
+    if (worksheet[eventNameCell]?.v) {
+      worksheet[eventNameCell].s = XLSX_STYLES.eventName;
+    }
+    if (worksheet[payloadCell]?.v) {
+      worksheet[payloadCell].s = XLSX_STYLES.eventPayload;
+    }
+    if (worksheet[dataTypeCell]?.v) {
+      const typeValue = String(worksheet[dataTypeCell].v).toLowerCase();
+      if (XLSX_STYLES.dataType[typeValue]) {
+        worksheet[dataTypeCell].s = XLSX_STYLES.dataType[typeValue];
+      }
+    }
+  }
 };
 
 const App = () => {
@@ -691,6 +866,7 @@ const App = () => {
     []
   );
   const [exportName, setExportName] = useState(defaultExportName);
+  const [exportFormat, setExportFormat] = useState("xlsx");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [showRules, setShowRules] = useState(false);
 
@@ -698,12 +874,15 @@ const App = () => {
     setLoading(true);
     setError("");
     try {
-      let response = await fetch("./event_library_new_3.xlsx");
+      let response = await fetch("./event_library_new.xlsx");
+      if (!response.ok) {
+        response = await fetch("./event_library_new_3.xlsx");
+      }
       if (!response.ok) {
         response = await fetch("./Event_library.xlsx");
       }
       if (!response.ok) {
-        throw new Error("Unable to load event_library_new.xlsx.");
+        throw new Error("Unable to load event library.");
       }
       const arrayBuffer = await response.arrayBuffer();
       const { industries: parsedIndustries, attributes: parsedAttributes } =
@@ -732,6 +911,7 @@ const App = () => {
           setSelectedIndustry(parsed.selectedIndustry || normalized.industries[0]?.name || "");
           setView(parsed.view || "library");
           setExportName(parsed.exportName || defaultExportName);
+          setExportFormat(parsed.exportFormat || "xlsx");
           setLoading(false);
           setHydrated(true);
           return;
@@ -751,9 +931,10 @@ const App = () => {
       selectedIndustry,
       view,
       exportName,
+      exportFormat,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [industries, attributes, selectedIndustry, view, exportName, hydrated]);
+  }, [industries, attributes, selectedIndustry, view, exportName, exportFormat, hydrated]);
 
   const currentIndustry = industries.find((industry) => industry.name === selectedIndustry);
 
@@ -884,20 +1065,77 @@ const handleAddEvent = () => {
   setEditingEvent({ industry: selectedIndustry, eventId: newEvent.id, isNew: true });
 };
 
-  const handleExport = () => {
+  const handleExportXlsx = async () => {
     const { eventRows, attributeRows } = buildExportRows(selectedEvents, selectedAttributes);
-
+    let XLSX;
+    try {
+      XLSX = await ensureXLSX();
+    } catch (err) {
+      alert("XLSX library not loaded. Use a local server (not file://) or allow CDN access.");
+      return;
+    }
     const wb = XLSX.utils.book_new();
     const wsEvents = XLSX.utils.aoa_to_sheet(eventRows);
     const wsAttributes = XLSX.utils.aoa_to_sheet(attributeRows);
 
+    if (!window.__XLSX_STYLE_READY) {
+      alert("Styled export requires xlsx-js-style. Exporting without styles.");
+    } else {
+      applyEventSheetStyles(wsEvents, eventRows);
+    }
+
     XLSX.utils.book_append_sheet(wb, wsEvents, "Events");
     XLSX.utils.book_append_sheet(wb, wsAttributes, "Attributes");
+
     const safeBaseName = sanitizeFileName(exportName) || defaultExportName;
-    const fileName = safeBaseName.toLowerCase().endsWith(".xlsx")
-      ? safeBaseName
-      : `${safeBaseName}.xlsx`;
-    XLSX.writeFile(wb, fileName);
+    const base = safeBaseName.toLowerCase().endsWith(".xlsx")
+      ? safeBaseName.replace(/\.xlsx$/i, "")
+      : safeBaseName;
+    XLSX.writeFile(wb, `${base}_styled.xlsx`);
+  };
+
+  const handleExportCsv = async () => {
+    const { eventRows, attributeRows } = buildExportRows(selectedEvents, selectedAttributes);
+    let XLSX;
+    try {
+      XLSX = await ensureXLSX();
+    } catch (err) {
+      alert("XLSX library not loaded. Use a local server (not file://) or allow CDN access.");
+      return;
+    }
+
+    const wsEvents = XLSX.utils.aoa_to_sheet(eventRows);
+    const wsAttributes = XLSX.utils.aoa_to_sheet(attributeRows);
+    const eventsCsv = XLSX.utils.sheet_to_csv(wsEvents);
+    const attributesCsv = XLSX.utils.sheet_to_csv(wsAttributes);
+
+    const safeBaseName = sanitizeFileName(exportName) || defaultExportName;
+    const base = safeBaseName.toLowerCase().endsWith(".csv")
+      ? safeBaseName.replace(/\.csv$/i, "")
+      : safeBaseName;
+
+    const downloadBlob = (content, filename) => {
+      const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    };
+
+    downloadBlob(eventsCsv, `${base}_events.csv`);
+    downloadBlob(attributesCsv, `${base}_attributes.csv`);
+  };
+
+  const handleExport = () => {
+    if (exportFormat === "csv") {
+      handleExportCsv();
+      return;
+    }
+    handleExportXlsx();
   };
 
   const handleReload = () => {
@@ -1002,6 +1240,27 @@ const handleAddEvent = () => {
               placeholder="CE_Event_Library_YYYY-MM-DD"
             />
           </div>
+          <div className="file-input">
+            <label>Export as</label>
+            <div className="toggle-group" role="group" aria-label="Export format">
+              <button
+                type="button"
+                className={`toggle ${exportFormat === "xlsx" ? "active" : ""}`}
+                aria-pressed={exportFormat === "xlsx"}
+                onClick={() => setExportFormat("xlsx")}
+              >
+                XLSX (styled)
+              </button>
+              <button
+                type="button"
+                className={`toggle ${exportFormat === "csv" ? "active" : ""}`}
+                aria-pressed={exportFormat === "csv"}
+                onClick={() => setExportFormat("csv")}
+              >
+                CSV
+              </button>
+            </div>
+          </div>
           <button className="ghost" onClick={handleReload}>
             Reload Source
           </button>
@@ -1012,7 +1271,7 @@ const handleAddEvent = () => {
             {showRules ? "Hide Rules" : "Show Rules"}
           </button>
           <button className="primary" onClick={handleExport} disabled={!canExport}>
-            Export Clean Excel
+            Export
           </button>
         </div>
       </header>
@@ -1453,6 +1712,7 @@ const EventEditor = ({ event, industryName, isNew, onClose, onSaveAll }) => {
                       <tr>
                         <th>Payload Name</th>
                         <th>Data Type</th>
+                        <th>Sample Value</th>
                         <th>Description</th>
                         <th></th>
                       </tr>
@@ -1483,11 +1743,21 @@ const EventEditor = ({ event, industryName, isNew, onClose, onSaveAll }) => {
                             <select
                               value={payload.dataType}
                               onChange={(e) =>
-                                updatePayload(payload.id, (item) => ({
-                                  ...item,
-                                  dataType: e.target.value,
-                                  inferredType: false,
-                                }))
+                                updatePayload(payload.id, (item) => {
+                                  const nextType = e.target.value;
+                                  const shouldUpdate = shouldResetSampleValue(
+                                    item.sampleValue,
+                                    item.dataType
+                                  );
+                                  return {
+                                    ...item,
+                                    dataType: nextType,
+                                    inferredType: false,
+                                    sampleValue: shouldUpdate
+                                      ? sampleValueForEventType(nextType)
+                                      : item.sampleValue,
+                                  };
+                                })
                               }
                             >
                               {DATA_TYPES.map((type) => (
@@ -1496,6 +1766,18 @@ const EventEditor = ({ event, industryName, isNew, onClose, onSaveAll }) => {
                                 </option>
                               ))}
                             </select>
+                          </td>
+                          <td>
+                            <input
+                              value={payload.sampleValue || ""}
+                              onChange={(e) =>
+                                updatePayload(payload.id, (item) => ({
+                                  ...item,
+                                  sampleValue: e.target.value,
+                                }))
+                              }
+                              placeholder={sampleValueForEventType(payload.dataType)}
+                            />
                           </td>
                           <td>
                             <input
@@ -1541,6 +1823,7 @@ const EventEditor = ({ event, industryName, isNew, onClose, onSaveAll }) => {
                           <tr>
                             <th>Field Name</th>
                             <th>Data Type</th>
+                            <th>Sample Value</th>
                             <th>Description</th>
                             <th></th>
                           </tr>
@@ -1571,11 +1854,21 @@ const EventEditor = ({ event, industryName, isNew, onClose, onSaveAll }) => {
                                 <select
                                   value={payload.dataType}
                                   onChange={(e) =>
-                                    updateArrayField(payload.id, (item) => ({
-                                      ...item,
-                                      dataType: e.target.value,
-                                      inferredType: false,
-                                    }))
+                                    updateArrayField(payload.id, (item) => {
+                                      const nextType = e.target.value;
+                                      const shouldUpdate = shouldResetSampleValue(
+                                        item.sampleValue,
+                                        item.dataType
+                                      );
+                                      return {
+                                        ...item,
+                                        dataType: nextType,
+                                        inferredType: false,
+                                        sampleValue: shouldUpdate
+                                          ? sampleValueForEventType(nextType)
+                                          : item.sampleValue,
+                                      };
+                                    })
                                   }
                                 >
                                   {DATA_TYPES.map((type) => (
@@ -1584,6 +1877,18 @@ const EventEditor = ({ event, industryName, isNew, onClose, onSaveAll }) => {
                                     </option>
                                   ))}
                                 </select>
+                              </td>
+                              <td>
+                                <input
+                                  value={payload.sampleValue || ""}
+                                  onChange={(e) =>
+                                    updateArrayField(payload.id, (item) => ({
+                                      ...item,
+                                      sampleValue: e.target.value,
+                                    }))
+                                  }
+                                  placeholder={sampleValueForEventType(payload.dataType)}
+                                />
                               </td>
                               <td>
                                 <input
@@ -1669,6 +1974,7 @@ const AttributesManager = ({
             <th>Include</th>
             <th>Attribute Name</th>
             <th>Data Type</th>
+            <th>Sample Value</th>
             <th>Description</th>
             <th></th>
           </tr>
@@ -1713,11 +2019,22 @@ const AttributesManager = ({
                   <select
                     value={attribute.dataType}
                     onChange={(e) =>
-                      onUpdate(attribute.id, (attr) => ({
-                        ...attr,
-                        dataType: e.target.value,
-                        inferredType: false,
-                      }))
+                      onUpdate(attribute.id, (attr) => {
+                        const nextType = e.target.value;
+                        const shouldUpdate = shouldResetSampleValue(
+                          attr.sampleValue,
+                          attr.dataType,
+                          true
+                        );
+                        return {
+                          ...attr,
+                          dataType: nextType,
+                          inferredType: false,
+                          sampleValue: shouldUpdate
+                            ? sampleValueForAttributeType(nextType)
+                            : attr.sampleValue,
+                        };
+                      })
                     }
                   >
                     {DATA_TYPES.map((type) => (
@@ -1726,6 +2043,18 @@ const AttributesManager = ({
                       </option>
                     ))}
                   </select>
+                </td>
+                <td>
+                  <input
+                    value={attribute.sampleValue || ""}
+                    onChange={(e) =>
+                      onUpdate(attribute.id, (attr) => ({
+                        ...attr,
+                        sampleValue: e.target.value,
+                      }))
+                    }
+                    placeholder={sampleValueForAttributeType(attribute.dataType)}
+                  />
                 </td>
                 <td>
                   <input
@@ -1769,19 +2098,29 @@ const AttributesManager = ({
 
 const ExportPreview = ({ events, attributes, onClose, onRemoveEvent }) => {
   const { attributeRows } = buildExportRows(events, attributes);
-  const eventHeader = ["eventName", "eventPayload", "dataType", "description", "eventDescription", "Action"];
+  const eventHeader = [
+    "eventName",
+    "eventPayload",
+    "dataType",
+    "sampleValue",
+    "description",
+    "eventDescription",
+    "Action",
+  ];
   const eventBody = events.flatMap((event) => {
     const payloads = [
       ...event.payloads.map((payload) => ({
         name: payload.name,
         dataType: payload.dataType,
         description: payload.description,
+        sampleValue: payload.sampleValue,
       })),
       ...(event.arrayPayload
         ? event.arrayPayload.fields.map((payload) => ({
             name: `items[].${payload.name}`,
             dataType: payload.dataType,
             description: payload.description,
+            sampleValue: payload.sampleValue,
           }))
         : []),
     ];
@@ -1789,7 +2128,7 @@ const ExportPreview = ({ events, attributes, onClose, onRemoveEvent }) => {
     if (payloads.length === 0) {
       return [
         {
-          cells: [event.eventName, "", "", "", event.description || "", "remove"],
+          cells: [event.eventName, "", "", "", "", event.description || "", "remove"],
           event,
           isHeader: true,
         },
@@ -1801,6 +2140,7 @@ const ExportPreview = ({ events, attributes, onClose, onRemoveEvent }) => {
         index === 0 ? event.eventName : "",
         payload.name,
         payload.dataType,
+        safeString(payload.sampleValue) || sampleValueForEventType(payload.dataType),
         payload.description || "",
         index === 0 ? event.description || "" : "",
         index === 0 ? "remove" : "",
