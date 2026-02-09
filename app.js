@@ -1419,6 +1419,15 @@ const handleAddEvent = () => {
     }));
   };
 
+  const clearAllEvents = () => {
+    setIndustries((prev) =>
+      prev.map((industry) => ({
+        ...industry,
+        events: industry.events.map((event) => ({ ...event, selected: false })),
+      }))
+    );
+  };
+
   const deleteEvent = (industryName, eventId) => {
     setIndustries((prev) =>
       prev.map((industry) =>
@@ -1575,6 +1584,9 @@ const handleAddEvent = () => {
               <div className="toolbar">
                 <button className="secondary" onClick={handleAddEvent}>
                   Add Custom Event
+                </button>
+                <button className="ghost" onClick={clearAllEvents}>
+                  Clear Selected Events
                 </button>
               </div>
             )}
