@@ -1,6 +1,6 @@
 const { useEffect, useMemo, useState } = React;
 
-const STORAGE_KEY = "ce-event-library-v2";
+const STORAGE_KEY = "ce-event-library-v3";
 const DATA_TYPES = ["text", "integer", "float", "date"];
 const ARRAY_GROUP_NAMES = [
   "items",
@@ -698,9 +698,12 @@ const App = () => {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("./Event_library.xlsx");
+      let response = await fetch("./event_library_new_3.xlsx");
       if (!response.ok) {
-        throw new Error("Unable to load Event_library.xlsx.");
+        response = await fetch("./Event_library.xlsx");
+      }
+      if (!response.ok) {
+        throw new Error("Unable to load event_library_new.xlsx.");
       }
       const arrayBuffer = await response.arrayBuffer();
       const { industries: parsedIndustries, attributes: parsedAttributes } =
@@ -1081,7 +1084,7 @@ const handleAddEvent = () => {
             <div className="summary-chip">
               Selected attributes: {selectedAttributes.length}
             </div>
-            <div
+            {/* <div //commented
               className={`summary-chip ${
                 exportValidation.errors.length ? "error" : ""
               }`}
@@ -1094,7 +1097,7 @@ const handleAddEvent = () => {
               }`}
             >
               Warnings: {exportValidation.warnings.length}
-            </div>
+            </div> */}
           </div>
 
           {showRules && (
@@ -1201,12 +1204,12 @@ const EventCard = ({ event, industryName, onEdit, onToggleSelect, onDelete }) =>
           Array fields: {event.arrayPayload ? event.arrayPayload.fields.length : 0}
         </span>
         {event.selected && <span className="badge success">Selected</span>}
-        {errors.length > 0 && (
+        {/* {errors.length > 0 && ( //commented
           <span className="badge error">{errors.length} errors</span>
         )}
         {warnings.length > 0 && (
           <span className="badge warning">{warnings.length} warnings</span>
-        )}
+        )} */}
       </div>
       <div className="event-actions">
         <button className="secondary" onClick={onEdit}>
