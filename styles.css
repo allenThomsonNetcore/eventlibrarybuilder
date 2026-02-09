@@ -80,7 +80,7 @@ body {
 .action-row {
   display: flex;
   gap: 12px;
-  align-items: center;
+  align-items: flex-end;
   flex-wrap: wrap;
 }
 
@@ -100,6 +100,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  position: relative;
+  padding-top: 12px;
 }
 
 .file-input label {
@@ -108,6 +110,9 @@ body {
   letter-spacing: 1px;
   text-transform: uppercase;
   color: var(--muted);
+  position: absolute;
+  top: -2px;
+  left: 2px;
 }
 
 .file-input input {
@@ -347,6 +352,8 @@ button.subtle {
   margin: 0 0 8px;
   font-family: "Space Grotesk", sans-serif;
   font-size: 18px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .event-card p {

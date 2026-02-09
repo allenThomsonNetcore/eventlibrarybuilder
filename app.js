@@ -202,6 +202,38 @@ const detectColumns = (headerRow) => {
   };
 };
 
+const detectUploadedEventColumns = (headerRow) => {
+  const headers = headerRow.map(normalizeHeader);
+  const findIndex = (keywords) =>
+    headers.findIndex((label) => keywords.some((keyword) => label.includes(keyword)));
+
+  const eventNameCol = findIndex(["event name", "eventname", "event"]);
+  const payloadNameCol = findIndex(["event payload", "eventpayload", "payload"]);
+  const dataTypeCol = findIndex(["data type", "datatype", "type"]);
+  const descriptionCol = headers.findIndex((label) => {
+    if (!label) return false;
+    const hasDesc = label.includes("description") || label.includes("desc");
+    if (!hasDesc) return false;
+    return !label.includes("event");
+  });
+  const eventDescriptionCol = findIndex([
+    "event description",
+    "eventdescription",
+    "event desc",
+    "event details",
+  ]);
+  const sampleValueCol = findIndex(["sample value", "samplevalue", "example", "sample"]);
+
+  return {
+    eventNameCol,
+    payloadNameCol,
+    dataTypeCol,
+    descriptionCol,
+    eventDescriptionCol,
+    sampleValueCol,
+  };
+};
+
 const createPayload = ({ name, dataType, description, inferredType, sampleValue }) => {
   const normalizedType = dataType || "text";
   const fallbackSample = sampleValueForEventType(normalizedType);
@@ -496,6 +528,111 @@ const parseSheet = (sheetName, sheet) => {
   return { events, attributes };
 };
 
+const parseUploadedEventWorkbook = (arrayBuffer, industryName) => {
+  const workbook = XLSX.read(arrayBuffer, { type: "array" });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) {
+    return { events: [], error: "Uploaded file has no sheets." };
+  }
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
+  const headerIndex = findHeaderRow(rows);
+  const headerRow = rows[headerIndex] || [];
+  let columns = detectUploadedEventColumns(headerRow);
+
+  const missing = [];
+  if (columns.eventNameCol < 0) missing.push("eventName");
+  if (columns.payloadNameCol < 0) missing.push("eventPayload");
+  if (columns.dataTypeCol < 0) missing.push("dataType");
+  if (missing.length) {
+    return {
+      events: [],
+      error: `Missing required columns: ${missing.join(", ")}.`,
+    };
+  }
+
+  const events = [];
+  let currentEvent = null;
+
+  for (let i = headerIndex + 1; i < rows.length; i += 1) {
+    const row = rows[i] || [];
+    if (!rowHasContent(row)) continue;
+
+    const headerSignature = row.map(normalizeHeader).join(" ");
+    if (
+      headerSignature.includes("event") &&
+      headerSignature.includes("payload") &&
+      headerSignature.includes("type")
+    ) {
+      columns = detectUploadedEventColumns(row);
+      continue;
+    }
+
+    const rawEvent = safeString(row[columns.eventNameCol]);
+    const rawPayload =
+      columns.payloadNameCol >= 0 ? safeString(row[columns.payloadNameCol]) : "";
+    const rawType = columns.dataTypeCol >= 0 ? safeString(row[columns.dataTypeCol]) : "";
+    const rawDesc =
+      columns.descriptionCol >= 0 ? safeString(row[columns.descriptionCol]) : "";
+    const rawEventDesc =
+      columns.eventDescriptionCol >= 0 ? safeString(row[columns.eventDescriptionCol]) : "";
+    const rawSample =
+      columns.sampleValueCol >= 0 ? safeString(row[columns.sampleValueCol]) : "";
+
+    if (rawEvent) {
+      const normalizedName = normalizeSnakeCase(rawEvent);
+      if (normalizedName) {
+        currentEvent = createEvent({
+          name: normalizedName,
+          description: rawEventDesc || "",
+          industry: industryName,
+        });
+        events.push(currentEvent);
+      } else {
+        currentEvent = null;
+      }
+    }
+
+    if (!currentEvent) continue;
+
+    if (rawEventDesc && !currentEvent.description) {
+      currentEvent.description = rawEventDesc;
+    }
+
+    if (!rawPayload) continue;
+
+    const normalizedType = normalizeDataType(rawType);
+    const payloadType = normalizedType || "text";
+    const inferredType = !normalizedType;
+    const arrayFieldName = parseArrayFieldName(rawPayload);
+    const normalizedPayload = arrayFieldName || normalizeSnakeCase(rawPayload);
+    if (!normalizedPayload) continue;
+
+    const payload = createPayload({
+      name: normalizedPayload,
+      dataType: payloadType,
+      description: rawDesc,
+      inferredType,
+      sampleValue: rawSample,
+    });
+
+    if (arrayFieldName) {
+      if (!currentEvent.arrayPayload) {
+        currentEvent.arrayPayload = { name: "items", fields: [] };
+      }
+      currentEvent.arrayPayload.fields.push(payload);
+    } else {
+      currentEvent.payloads.push(payload);
+    }
+  }
+
+  if (events.length === 0) {
+    return { events: [], error: "No events found in the uploaded sheet." };
+  }
+
+  return { events, error: "" };
+};
+
 const parseWorkbook = (arrayBuffer) => {
   const workbook = XLSX.read(arrayBuffer, { type: "array" });
   const industries = [];
@@ -657,6 +794,18 @@ const validateAttribute = (attribute) => {
 };
 
 const formatIndustryLabel = (name) => name.replace(/[_-]+/g, " ");
+
+const buildUniqueIndustryName = (baseName, existingNames) => {
+  const normalized = normalizeSnakeCase(baseName) || "uploaded_events";
+  if (!existingNames.includes(normalized)) return normalized;
+  let counter = 2;
+  let candidate = `${normalized}_${counter}`;
+  while (existingNames.includes(candidate)) {
+    counter += 1;
+    candidate = `${normalized}_${counter}`;
+  }
+  return candidate;
+};
 
 const sampleValueForEventType = (dataType) => {
   switch ((dataType || "").toLowerCase()) {
@@ -869,6 +1018,11 @@ const App = () => {
   const [exportFormat, setExportFormat] = useState("xlsx");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadName, setUploadName] = useState("uploaded_events");
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadError, setUploadError] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   const loadFromWorkbook = async () => {
     setLoading(true);
@@ -947,6 +1101,11 @@ const App = () => {
   const selectedAttributes = useMemo(
     () => attributes.filter((attribute) => attribute.selected),
     [attributes]
+  );
+
+  const uploadResolvedName = buildUniqueIndustryName(
+    uploadName,
+    industries.map((industry) => industry.name)
   );
 
   const exportValidation = useMemo(() => {
@@ -1138,6 +1297,88 @@ const handleAddEvent = () => {
     handleExportXlsx();
   };
 
+  const handleDownloadSampleSheet = async () => {
+    let XLSX;
+    try {
+      XLSX = await ensureXLSX();
+    } catch (err) {
+      alert("XLSX library not loaded. Use a local server (not file://) or allow CDN access.");
+      return;
+    }
+    const sampleRows = [
+      ["eventName", "eventPayload", "dataType", "sampleValue", "description", "eventDescription"],
+      [
+        "registration",
+        "source",
+        "text",
+        "\"hello\"",
+        "web or app",
+        "Call when a new user registers",
+      ],
+      ["", "method", "text", "\"hello\"", "Social, email, phone", ""],
+      [
+        "product_collection",
+        "items[].prid",
+        "text",
+        "\"hello\"",
+        "product id",
+        "Collects products in cart",
+      ],
+      ["", "items[].prqt", "integer", "12", "quantity", ""],
+      ["", "items[].price", "float", "12.1", "price", ""],
+    ];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(sampleRows);
+    XLSX.utils.book_append_sheet(wb, ws, "Events");
+    XLSX.writeFile(wb, "sample_event_sheet.xlsx");
+  };
+
+  const handleUploadOpen = () => {
+    setUploadName("uploaded_events");
+    setUploadFile(null);
+    setUploadError("");
+    setUploadOpen(true);
+  };
+
+  const handleUploadEvents = async () => {
+    if (!uploadFile) {
+      setUploadError("Select a CSV or XLSX file to upload.");
+      return;
+    }
+    setUploading(true);
+    setUploadError("");
+    try {
+      await ensureXLSX();
+      const arrayBuffer = await uploadFile.arrayBuffer();
+      const existingNames = industries.map((industry) => industry.name);
+      const resolvedName = buildUniqueIndustryName(uploadName, existingNames);
+      const { events, error: uploadParseError } = parseUploadedEventWorkbook(
+        arrayBuffer,
+        resolvedName
+      );
+
+      if (uploadParseError) {
+        setUploadError(uploadParseError);
+        return;
+      }
+
+      setIndustries((prev) => [
+        {
+          name: resolvedName,
+          events,
+        },
+        ...prev,
+      ]);
+      setSelectedIndustry(resolvedName);
+      setView("library");
+      setUploadOpen(false);
+    } catch (err) {
+      setUploadError(err.message || "Unable to read the uploaded file. Please try again.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleReload = () => {
     localStorage.removeItem(STORAGE_KEY);
     loadFromWorkbook();
@@ -1263,6 +1504,9 @@ const handleAddEvent = () => {
           </div>
           <button className="ghost" onClick={handleReload}>
             Reload Source
+          </button>
+          <button className="ghost" onClick={handleUploadOpen}>
+            Upload Event Sheet
           </button>
           <button className="ghost" onClick={() => setPreviewOpen(true)}>
             Preview Export
@@ -1444,6 +1688,59 @@ const handleAddEvent = () => {
           onRemoveEvent={deselectEvent}
           onClose={() => setPreviewOpen(false)}
         />
+      )}
+
+      {uploadOpen && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h2>Upload Event Sheet</h2>
+              <button className="ghost" onClick={() => setUploadOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="modal-section">
+              <label className="inline-note">New Industry Name</label>
+              <input
+                className="input"
+                value={uploadName}
+                onChange={(e) => setUploadName(e.target.value)}
+                placeholder="uploaded_events"
+              />
+              <div className="inline-note">Will be saved as: {uploadResolvedName}</div>
+
+              <label className="inline-note" style={{ marginTop: "12px" }}>
+                Event sheet (.xlsx or .csv)
+              </label>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+              />
+              <div className="inline-note">
+                Required columns: eventName, eventPayload, dataType. Optional: description,
+                eventDescription, sampleValue.
+              </div>
+              {uploadError && (
+                <div className="inline-note" style={{ color: "var(--error)" }}>
+                  {uploadError}
+                </div>
+              )}
+              <div className="action-row" style={{ marginTop: "16px" }}>
+                <button className="ghost" onClick={handleDownloadSampleSheet}>
+                  Download Sample Sheet
+                </button>
+                <button
+                  className="primary"
+                  onClick={handleUploadEvents}
+                  disabled={uploading}
+                >
+                  {uploading ? "Importing..." : "Import Events"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
